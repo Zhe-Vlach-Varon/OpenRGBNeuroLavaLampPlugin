@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-linux-amd64:
     runs-on: ubuntu-latest
@@ -125,7 +128,8 @@ jobs:
           cp artifacts/libOpenRGBNeuroLavaLampPlugin_MacOS_ARM64.dylib/libOpenRGBNeuroLavaLampPlugin.dylib release-files/libOpenRGBNeuroLavaLampPlugin_MacOS_ARM64.dylib || true
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
           files: release-files/*
           draft: false
