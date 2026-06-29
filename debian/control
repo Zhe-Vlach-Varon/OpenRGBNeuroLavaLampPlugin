@@ -1,0 +1,24 @@
+Source: OpenRGBNeuroLavaLampPlugin
+Maintainer: bw8686
+Section: misc
+Priority: optional
+Standards-Version: 3.9.2
+Build-Depends:
+ debhelper (>= 9),
+ pkg-config,
+ qtbase5-dev,
+ qtbase5-dev-tools,
+ qttools5-dev-tools,
+ qt5-qmake,
+ libusb-1.0-0-dev,
+ libhidapi-dev,
+ libmbedtls-dev,
+Homepage: https://github.com/bw8686/OpenRGBNeuroLavaLampPlugin
+
+Package: openrgb-plugin-neuro-lava-lamp
+Architecture: any
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ openrgb,
+Description: Neuro-LavaLamp plugin for OpenRGB

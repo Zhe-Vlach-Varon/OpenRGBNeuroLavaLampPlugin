@@ -1,0 +1,5 @@
+openrgb-plugin-neuro-lava-lamp (__VERSION__) UNRELEASED; urgency=medium
+
+  * Builds from git master.  See git history for more information.
+
+ -- Adam Honse <adam@Adam-Laptop.lan>  Mon, 07 Jan 2025 12:05:00 -0500
