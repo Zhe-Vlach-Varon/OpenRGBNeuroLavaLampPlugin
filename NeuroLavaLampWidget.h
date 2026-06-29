@@ -81,7 +81,8 @@ private:
     QVBoxLayout* device_list_layout;
     QLineEdit* url_input;
     QLineEdit* sse_url_input;
-    QSpinBox* interval_input;
+    QSpinBox* offline_interval_input;
+    QSpinBox* live_interval_input;
     
     QComboBox* zero_color_behavior_input;
     QComboBox* color_effect_input;

@@ -37,14 +37,20 @@ NeuroLavaLampWidget::NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *
     
     url_input = new QLineEdit("https://api.neurolavalamp.com/v1/rgb");
     sse_url_input = new QLineEdit("https://api.neurolavalamp.com/v1/events");
-    interval_input = new QSpinBox();
-    interval_input->setRange(100, 60000);
-    interval_input->setValue(10000);
-    interval_input->setSuffix(" ms");
+    offline_interval_input = new QSpinBox();
+    offline_interval_input->setRange(100, 60000);
+    offline_interval_input->setValue(10000);
+    offline_interval_input->setSuffix(" ms");
+    
+    live_interval_input = new QSpinBox();
+    live_interval_input->setRange(100, 60000);
+    live_interval_input->setValue(3000);
+    live_interval_input->setSuffix(" ms");
     
     settings_layout->addRow("SSE Stream URL:", sse_url_input);
     settings_layout->addRow("HTTP Polling URL:", url_input);
-    settings_layout->addRow("Poll Interval:", interval_input);
+    settings_layout->addRow("Offline Poll Interval:", offline_interval_input);
+    settings_layout->addRow("Live Poll Interval:", live_interval_input);
     left_layout->addWidget(settings_group);
     
     // Extra Options Group
@@ -84,7 +90,8 @@ NeuroLavaLampWidget::NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *
 
     connect(url_input, &QLineEdit::editingFinished, this, &NeuroLavaLampWidget::onSettingsChanged);
     connect(sse_url_input, &QLineEdit::editingFinished, this, &NeuroLavaLampWidget::onSettingsChanged);
-    connect(interval_input, QOverload<int>::of(&QSpinBox::valueChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
+    connect(offline_interval_input, QOverload<int>::of(&QSpinBox::valueChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
+    connect(live_interval_input, QOverload<int>::of(&QSpinBox::valueChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
     connect(zero_color_behavior_input, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
     connect(color_effect_input, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
     connect(animation_fps_input, QOverload<int>::of(&QSpinBox::valueChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
@@ -123,7 +130,7 @@ NeuroLavaLampWidget::NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *
 
     poll_timer = new QTimer(this);
     connect(poll_timer, &QTimer::timeout, this, &NeuroLavaLampWidget::pollApi);
-    poll_timer->start(interval_input->value());
+    poll_timer->start(offline_interval_input->value());
     
     animation_timer = new QTimer(this);
     connect(animation_timer, &QTimer::timeout, this, &NeuroLavaLampWidget::animationLoop);
@@ -164,7 +171,8 @@ void NeuroLavaLampWidget::loadSettings()
     
     url_input->blockSignals(true);
     sse_url_input->blockSignals(true);
-    interval_input->blockSignals(true);
+    offline_interval_input->blockSignals(true);
+    live_interval_input->blockSignals(true);
     zero_color_behavior_input->blockSignals(true);
     color_effect_input->blockSignals(true);
     animation_fps_input->blockSignals(true);
@@ -177,9 +185,11 @@ void NeuroLavaLampWidget::loadSettings()
     {
         sse_url_input->setText(QString::fromStdString(settings["sse_url"].get<std::string>()));
     }
-    if(settings.contains("interval") && settings["interval"].is_number_integer())
-    {
-        interval_input->setValue(settings["interval"].get<int>());
+    if (settings.contains("interval") && settings["interval"].is_number()) {
+        offline_interval_input->setValue(settings["interval"].get<int>());
+    }
+    if (settings.contains("live_interval") && settings["live_interval"].is_number()) {
+        live_interval_input->setValue(settings["live_interval"].get<int>());
     }
     
     if(settings.contains("zero_color_behavior") && settings["zero_color_behavior"].is_number_integer()) {
@@ -194,7 +204,8 @@ void NeuroLavaLampWidget::loadSettings()
     
     url_input->blockSignals(false);
     sse_url_input->blockSignals(false);
-    interval_input->blockSignals(false);
+    offline_interval_input->blockSignals(false);
+    live_interval_input->blockSignals(false);
     zero_color_behavior_input->blockSignals(false);
     color_effect_input->blockSignals(false);
     animation_fps_input->blockSignals(false);
@@ -205,7 +216,8 @@ void NeuroLavaLampWidget::saveSettings()
     json settings;
     settings["url"] = url_input->text().toStdString();
     settings["sse_url"] = sse_url_input->text().toStdString();
-    settings["interval"] = interval_input->value();
+    settings["interval"] = offline_interval_input->value();
+    settings["live_interval"] = live_interval_input->value();
     
     settings["zero_color_behavior"] = zero_color_behavior_input->currentIndex();
     settings["color_effect"] = color_effect_input->currentIndex();
@@ -229,7 +241,30 @@ void NeuroLavaLampWidget::saveSettings()
 void NeuroLavaLampWidget::onSettingsChanged()
 {
     saveSettings();
-    poll_timer->setInterval(interval_input->value());
+    
+    // Only restart SSE if the URL actually changed (or if it's dead)
+    if (!sse_reply || sse_url_input->text() != sse_reply->url().toString()) {
+        startSseConnection();
+    }
+    
+    poll_timer->setInterval(is_live ? live_interval_input->value() : offline_interval_input->value());
+    
+    // If we're currently live, re-trigger the animation with the new effect/fps settings
+    if (is_live) {
+        animation_target_color = current_live_color;
+        animation_progress = 0;
+        animation_duration = 1000;
+        
+        int effect = color_effect_input->currentIndex();
+        if (effect == 0) {
+            applyColor(current_live_color);
+            animation_timer->stop();
+        } else {
+            int fps = animation_fps_input->value();
+            int interval = 1000 / fps;
+            animation_timer->start(interval);
+        }
+    }
 }
 
 void NeuroLavaLampWidget::updateDeviceList()
@@ -351,7 +386,6 @@ void NeuroLavaLampWidget::refreshDeviceLiveState(RGBController* dev)
     if (device_backups.contains(dev)) {
         setEffectsPluginDeviceState(*target_item, true); // True = restoring checkmarks
         restoreDevice(dev);
-        device_backups.remove(dev);
     }
 
     // If it STILL has selected zones after the toggle, re-enter live state
@@ -492,6 +526,7 @@ void NeuroLavaLampWidget::processEventData(const QByteArray& data)
             if (!is_live) {
                 // Transition to live: backup state
                 is_live = true;
+                poll_timer->setInterval(live_interval_input->value());
                 for (const auto& item : device_items) {
                     bool has_selected = false;
                     for (const auto& zone : item.zones) {
@@ -530,6 +565,7 @@ void NeuroLavaLampWidget::processEventData(const QByteArray& data)
         if (is_live) {
             // Transition to offline: restore state
             is_live = false;
+            poll_timer->setInterval(offline_interval_input->value());
             for (const auto& item : device_items) {
                 bool has_selected = false;
                 for (const auto& zone : item.zones) {
@@ -704,6 +740,10 @@ void NeuroLavaLampWidget::setEffectsPluginDeviceState(const DeviceItem& item, bo
         }
     }
 
+    if (restoring) {
+        original_effects_state.remove(deviceName);
+    }
+
     effectTabs->setCurrentIndex(userIndex);
 }
 
@@ -727,6 +767,7 @@ void NeuroLavaLampWidget::restoreDevice(RGBController* dev)
     }
     
     dev->UpdateLEDs();
+    device_backups.remove(dev);
 }
 
 void NeuroLavaLampWidget::applyColor(RGBColor color, bool instant)
