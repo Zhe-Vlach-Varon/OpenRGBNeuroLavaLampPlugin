@@ -227,7 +227,7 @@ void NeuroLavaLampWidget::saveSettings()
     for (const auto& item : device_items) {
         for (const auto& zone : item.zones) {
             if (zone.checkbox->isChecked()) {
-                std::string unique_id = item.controller->location + ":" + std::to_string(zone.zone_idx);
+                std::string unique_id = item.controller->name + ":" + item.controller->serial + ":" + std::to_string(zone.zone_idx);
                 selected_zones.push_back(unique_id);
             }
         }
@@ -294,6 +294,8 @@ void NeuroLavaLampWidget::updateDeviceList()
         item.controller = dev;
         item.device_checkbox = dev_cb;
         
+        bool any_zone_checked = false;
+        
         for (size_t z = 0; z < dev->zones.size(); z++) {
             QCheckBox* zone_cb = new QCheckBox(QString::fromStdString(dev->zones[z].name));
             zones_layout->addWidget(zone_cb);
@@ -302,9 +304,10 @@ void NeuroLavaLampWidget::updateDeviceList()
             z_item.zone_idx = z;
             z_item.checkbox = zone_cb;
             
-            std::string unique_id = dev->location + ":" + std::to_string(z);
+            std::string unique_id = dev->name + ":" + dev->serial + ":" + std::to_string(z);
             if (std::find(saved_zones.begin(), saved_zones.end(), unique_id) != saved_zones.end()) {
                 zone_cb->setChecked(true);
+                any_zone_checked = true;
             }
             
             connect(zone_cb, &QCheckBox::toggled, this, [this, dev](bool) {
@@ -312,6 +315,10 @@ void NeuroLavaLampWidget::updateDeviceList()
             });
             
             item.zones.push_back(z_item);
+        }
+        
+        if (any_zone_checked) {
+            dev_cb->setChecked(true);
         }
         
         dev_layout->addLayout(zones_layout);
