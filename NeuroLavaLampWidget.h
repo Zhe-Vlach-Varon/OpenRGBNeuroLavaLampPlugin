@@ -58,6 +58,9 @@ private slots:
     void onSettingsChanged();
     void onSelectAllClicked();
     
+    void fetchSchedule();
+    void onScheduleReply(QNetworkReply* reply);
+    
     void animationLoop();
     void onDeviceCheckboxToggled(bool checked, RGBController* dev);
     void onZoneCheckboxToggled(RGBController* dev);
@@ -81,12 +84,14 @@ private:
     QVBoxLayout* device_list_layout;
     QLineEdit* url_input;
     QLineEdit* sse_url_input;
+    QLineEdit* schedule_url_input;
     QSpinBox* offline_interval_input;
     QSpinBox* live_interval_input;
     
     QComboBox* zero_color_behavior_input;
     QComboBox* color_effect_input;
     QSpinBox* animation_fps_input;
+    QCheckBox* disable_evil_input;
     
     QLabel* status_label;
     
@@ -95,6 +100,9 @@ private:
     
     QTimer* animation_timer;
     bool is_zero_color_override;
+    
+    QTimer* schedule_timer;
+    bool is_evil_only_stream;
     
     RGBColor animation_start_color;
     RGBColor animation_target_color;

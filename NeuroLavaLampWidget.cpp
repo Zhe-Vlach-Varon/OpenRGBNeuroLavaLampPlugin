@@ -37,6 +37,7 @@ NeuroLavaLampWidget::NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *
     
     url_input = new QLineEdit("https://api.neurolavalamp.com/v1/rgb");
     sse_url_input = new QLineEdit("https://api.neurolavalamp.com/v1/events");
+    schedule_url_input = new QLineEdit("https://schedule-api.nwero.net/schedule");
     offline_interval_input = new QSpinBox();
     offline_interval_input->setRange(100, 60000);
     offline_interval_input->setValue(10000);
@@ -49,6 +50,7 @@ NeuroLavaLampWidget::NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *
     
     settings_layout->addRow("SSE Stream URL:", sse_url_input);
     settings_layout->addRow("HTTP Polling URL:", url_input);
+    settings_layout->addRow("Schedule API URL:", schedule_url_input);
     settings_layout->addRow("Offline Poll Interval:", offline_interval_input);
     settings_layout->addRow("Live Poll Interval:", live_interval_input);
     left_layout->addWidget(settings_group);
@@ -82,6 +84,10 @@ NeuroLavaLampWidget::NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *
     animation_fps_input->setValue(30);
     animation_fps_input->setSuffix(" FPS");
     
+    disable_evil_input = new QCheckBox("Disable Evil Takeover");
+    disable_evil_input->setToolTip("Prevents the plugin from applying colors if the schedule indicates it is an Evil-only stream.");
+    
+    extra_layout->addRow("Plasma Globe Rule:", disable_evil_input);
     extra_layout->addRow(zero_color_label, zero_color_behavior_input);
     extra_layout->addRow("Color Effect:", color_effect_input);
     extra_layout->addRow("Animation FPS:", animation_fps_input);
@@ -90,11 +96,13 @@ NeuroLavaLampWidget::NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *
 
     connect(url_input, &QLineEdit::editingFinished, this, &NeuroLavaLampWidget::onSettingsChanged);
     connect(sse_url_input, &QLineEdit::editingFinished, this, &NeuroLavaLampWidget::onSettingsChanged);
+    connect(schedule_url_input, &QLineEdit::editingFinished, this, &NeuroLavaLampWidget::onSettingsChanged);
     connect(offline_interval_input, QOverload<int>::of(&QSpinBox::valueChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
     connect(live_interval_input, QOverload<int>::of(&QSpinBox::valueChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
     connect(zero_color_behavior_input, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
     connect(color_effect_input, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
     connect(animation_fps_input, QOverload<int>::of(&QSpinBox::valueChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
+    connect(disable_evil_input, &QCheckBox::toggled, this, &NeuroLavaLampWidget::onSettingsChanged);
     
     // Status Label
     status_label = new QLabel("Neuro Lava Lamp: Status Unknown");
@@ -137,10 +145,16 @@ NeuroLavaLampWidget::NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *
     is_zero_color_override = false;
     animation_progress = 0;
     
+    is_evil_only_stream = false;
+    schedule_timer = new QTimer(this);
+    connect(schedule_timer, &QTimer::timeout, this, &NeuroLavaLampWidget::fetchSchedule);
+    schedule_timer->start(3600000); // Poll every 1 hour when offline
+    
     updateDeviceList();
     
     // Delay the initial connection to ensure other plugins (like Effects) have fully loaded
     QTimer::singleShot(2000, this, [this]() {
+        fetchSchedule();
         startSseConnection();
         pollApi();
     });
@@ -171,11 +185,13 @@ void NeuroLavaLampWidget::loadSettings()
     
     url_input->blockSignals(true);
     sse_url_input->blockSignals(true);
+    schedule_url_input->blockSignals(true);
     offline_interval_input->blockSignals(true);
     live_interval_input->blockSignals(true);
     zero_color_behavior_input->blockSignals(true);
     color_effect_input->blockSignals(true);
     animation_fps_input->blockSignals(true);
+    disable_evil_input->blockSignals(true);
     
     if(settings.contains("url") && settings["url"].is_string())
     {
@@ -184,6 +200,10 @@ void NeuroLavaLampWidget::loadSettings()
     if(settings.contains("sse_url") && settings["sse_url"].is_string())
     {
         sse_url_input->setText(QString::fromStdString(settings["sse_url"].get<std::string>()));
+    }
+    if(settings.contains("schedule_url") && settings["schedule_url"].is_string())
+    {
+        schedule_url_input->setText(QString::fromStdString(settings["schedule_url"].get<std::string>()));
     }
     if (settings.contains("interval") && settings["interval"].is_number()) {
         offline_interval_input->setValue(settings["interval"].get<int>());
@@ -201,14 +221,19 @@ void NeuroLavaLampWidget::loadSettings()
     if(settings.contains("animation_fps") && settings["animation_fps"].is_number_integer()) {
         animation_fps_input->setValue(settings["animation_fps"].get<int>());
     }
+    if(settings.contains("disable_evil") && settings["disable_evil"].is_boolean()) {
+        disable_evil_input->setChecked(settings["disable_evil"].get<bool>());
+    }
     
     url_input->blockSignals(false);
     sse_url_input->blockSignals(false);
+    schedule_url_input->blockSignals(false);
     offline_interval_input->blockSignals(false);
     live_interval_input->blockSignals(false);
     zero_color_behavior_input->blockSignals(false);
     color_effect_input->blockSignals(false);
     animation_fps_input->blockSignals(false);
+    disable_evil_input->blockSignals(false);
 }
 
 void NeuroLavaLampWidget::saveSettings()
@@ -216,12 +241,14 @@ void NeuroLavaLampWidget::saveSettings()
     json settings;
     settings["url"] = url_input->text().toStdString();
     settings["sse_url"] = sse_url_input->text().toStdString();
+    settings["schedule_url"] = schedule_url_input->text().toStdString();
     settings["interval"] = offline_interval_input->value();
     settings["live_interval"] = live_interval_input->value();
     
     settings["zero_color_behavior"] = zero_color_behavior_input->currentIndex();
     settings["color_effect"] = color_effect_input->currentIndex();
     settings["animation_fps"] = animation_fps_input->value();
+    settings["disable_evil"] = disable_evil_input->isChecked();
     
     json selected_zones = json::array();
     for (const auto& item : device_items) {
@@ -459,8 +486,101 @@ void NeuroLavaLampWidget::onNetworkReply(QNetworkReply* reply)
     processEventData(response_data);
 }
 
+void NeuroLavaLampWidget::fetchSchedule()
+{
+    QString schedule_url = schedule_url_input->text();
+    if (schedule_url.isEmpty()) return;
+    
+    QNetworkRequest request((QUrl(schedule_url)));
+    QNetworkReply* reply = network_manager->get(request);
+    
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        this->onScheduleReply(reply);
+    });
+}
+
+void NeuroLavaLampWidget::onScheduleReply(QNetworkReply* reply)
+{
+    reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError) {
+        return;
+    }
+    
+    QByteArray response_data = reply->readAll();
+    
+    try {
+        json j = json::parse(response_data.toStdString());
+        if (!j.is_array()) return;
+        
+        QDateTime now = QDateTime::currentDateTimeUtc();
+        QDateTime now_plus_margin = now.addSecs(3600 * 2); // 2 hours leeway for early starts
+        QDateTime now_minus_margin = now.addSecs(-3600 * 18); // 18 hours limit so we don't pick a stream from last week
+        
+        json last_valid_stream = nullptr;
+        
+        for (const auto& item : j) {
+            if (!item.contains("timestamp") || !item["timestamp"].is_string()) continue;
+            
+            QString timestamp_str = QString::fromStdString(item["timestamp"].get<std::string>());
+            QDateTime dt = QDateTime::fromString(timestamp_str, Qt::ISODate);
+            dt.setTimeSpec(Qt::UTC);
+            
+            // Only consider it the "current" stream if it's within the recent window
+            if (dt <= now_plus_margin && dt >= now_minus_margin) {
+                last_valid_stream = item;
+            }
+        }
+        
+        is_evil_only_stream = false;
+        
+        if (last_valid_stream != nullptr && last_valid_stream.contains("live") && last_valid_stream["live"].get<bool>()) {
+            if (last_valid_stream.contains("streamers") && last_valid_stream["streamers"].is_array()) {
+                bool has_evil = false;
+                bool has_neuro = false;
+                
+                for (const auto& streamer : last_valid_stream["streamers"]) {
+                    if (streamer.is_string()) {
+                        std::string name = streamer.get<std::string>();
+                        if (name == "Evil") has_evil = true;
+                        if (name == "Neuro") has_neuro = true;
+                    }
+                }
+                
+                if (has_evil && !has_neuro) {
+                    is_evil_only_stream = true;
+                }
+            }
+        }
+    } catch (...) {
+        // Parse error, just ignore
+    }
+}
+
 void NeuroLavaLampWidget::processEventData(const QByteArray& data)
 {
+    if (disable_evil_input->isChecked() && is_evil_only_stream) {
+        status_label->setText("Neuro Lava Lamp: Disabled (Plasma Globe rule active)");
+        
+        if (is_live) {
+            is_live = false;
+            poll_timer->setInterval(offline_interval_input->value());
+            for (const auto& item : device_items) {
+                bool has_selected = false;
+                for (const auto& zone : item.zones) {
+                    if (zone.checkbox->isChecked()) {
+                        has_selected = true;
+                        break;
+                    }
+                }
+                if (has_selected && device_backups.contains(item.controller)) {
+                    setEffectsPluginDeviceState(item, true);
+                    restoreDevice(item.controller);
+                }
+            }
+        }
+        return;
+    }
+    
     QJsonDocument doc = QJsonDocument::fromJson(data);
     if (!doc.isObject()) {
         return;
@@ -534,6 +654,7 @@ void NeuroLavaLampWidget::processEventData(const QByteArray& data)
                 // Transition to live: backup state
                 is_live = true;
                 poll_timer->setInterval(live_interval_input->value());
+                schedule_timer->setInterval(1800000); // Poll schedule every 30 mins while live
                 for (const auto& item : device_items) {
                     bool has_selected = false;
                     for (const auto& zone : item.zones) {
@@ -573,6 +694,7 @@ void NeuroLavaLampWidget::processEventData(const QByteArray& data)
             // Transition to offline: restore state
             is_live = false;
             poll_timer->setInterval(offline_interval_input->value());
+            schedule_timer->setInterval(3600000); // Poll schedule every 1 hour while offline
             for (const auto& item : device_items) {
                 bool has_selected = false;
                 for (const auto& zone : item.zones) {
