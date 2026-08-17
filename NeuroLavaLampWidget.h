@@ -75,6 +75,7 @@ private:
 
     ResourceManagerInterface* resource_manager;
     QNetworkAccessManager* network_manager;
+    QNetworkAccessManager* schedule_network_manager;
     QTimer* poll_timer;
     
     QNetworkReply* sse_reply;
@@ -94,9 +95,11 @@ private:
     QCheckBox* disable_evil_input;
     
     QLabel* status_label;
+    QLabel* schedule_status_label;
     
     QString current_connection_mode;
     RGBColor current_live_color;
+    QByteArray last_raw_event_data;
     
     QTimer* animation_timer;
     bool is_zero_color_override;

@@ -104,9 +104,11 @@ NeuroLavaLampWidget::NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *
     connect(animation_fps_input, QOverload<int>::of(&QSpinBox::valueChanged), this, &NeuroLavaLampWidget::onSettingsChanged);
     connect(disable_evil_input, &QCheckBox::toggled, this, &NeuroLavaLampWidget::onSettingsChanged);
     
-    // Status Label
+    // Status Labels
     status_label = new QLabel("Neuro Lava Lamp: Status Unknown");
+    schedule_status_label = new QLabel("Schedule: Not yet fetched");
     left_layout->addWidget(status_label);
+    left_layout->addWidget(schedule_status_label);
     left_layout->addStretch();
 
     // Load Settings
@@ -135,6 +137,9 @@ NeuroLavaLampWidget::NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *
 
     network_manager = new QNetworkAccessManager(this);
     connect(network_manager, &QNetworkAccessManager::finished, this, &NeuroLavaLampWidget::onNetworkReply);
+    
+    schedule_network_manager = new QNetworkAccessManager(this);
+    connect(schedule_network_manager, &QNetworkAccessManager::finished, this, &NeuroLavaLampWidget::onScheduleReply);
 
     poll_timer = new QTimer(this);
     connect(poll_timer, &QTimer::timeout, this, &NeuroLavaLampWidget::pollApi);
@@ -276,20 +281,25 @@ void NeuroLavaLampWidget::onSettingsChanged()
     
     poll_timer->setInterval(is_live ? live_interval_input->value() : offline_interval_input->value());
     
-    // If we're currently live, re-trigger the animation with the new effect/fps settings
-    if (is_live) {
-        animation_target_color = current_live_color;
-        animation_progress = 0;
-        animation_duration = 1000;
-        
-        int effect = color_effect_input->currentIndex();
-        if (effect == 0) {
-            applyColor(current_live_color);
-            animation_timer->stop();
-        } else {
-            int fps = animation_fps_input->value();
-            int interval = 1000 / fps;
-            animation_timer->start(interval);
+    // Evaluate if the toggle state requires us to re-process the last event to seize/drop control instantly
+    if (!last_raw_event_data.isEmpty()) {
+        processEventData(last_raw_event_data);
+    } else {
+        // If we're currently live (and no event data exists for some reason), re-trigger the animation
+        if (is_live) {
+            animation_target_color = current_live_color;
+            animation_progress = 0;
+            animation_duration = 1000;
+            
+            int effect = color_effect_input->currentIndex();
+            if (effect == 0) {
+                applyColor(current_live_color);
+                animation_timer->stop();
+            } else {
+                int fps = animation_fps_input->value();
+                int interval = 1000 / fps;
+                animation_timer->start(interval);
+            }
         }
     }
 }
@@ -461,6 +471,7 @@ void NeuroLavaLampWidget::pollApi()
                 }
             }
             if (has_any_zone) {
+                // If it's a normal live stream (not disabled by rule), keep effects off
                 setEffectsPluginDeviceState(item, false);
             }
         }
@@ -492,17 +503,16 @@ void NeuroLavaLampWidget::fetchSchedule()
     if (schedule_url.isEmpty()) return;
     
     QNetworkRequest request((QUrl(schedule_url)));
-    QNetworkReply* reply = network_manager->get(request);
-    
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        this->onScheduleReply(reply);
-    });
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setRawHeader("Accept", "application/json");
+    schedule_network_manager->get(request);
 }
 
 void NeuroLavaLampWidget::onScheduleReply(QNetworkReply* reply)
 {
     reply->deleteLater();
     if (reply->error() != QNetworkReply::NoError) {
+        schedule_status_label->setText(QString("Schedule: Fetch failed — %1").arg(reply->errorString()));
         return;
     }
     
@@ -510,30 +520,36 @@ void NeuroLavaLampWidget::onScheduleReply(QNetworkReply* reply)
     
     try {
         json j = json::parse(response_data.toStdString());
-        if (!j.is_array()) return;
+        if (!j.is_array()) {
+            schedule_status_label->setText("Schedule: Fetch failed (invalid response)");
+            return;
+        }
         
         QDateTime now = QDateTime::currentDateTimeUtc();
         QDateTime now_plus_margin = now.addSecs(3600 * 2); // 2 hours leeway for early starts
         QDateTime now_minus_margin = now.addSecs(-3600 * 18); // 18 hours limit so we don't pick a stream from last week
         
-        json last_valid_stream = nullptr;
+        bool found_stream = false;
+        json last_valid_stream;
         
         for (const auto& item : j) {
             if (!item.contains("timestamp") || !item["timestamp"].is_string()) continue;
             
             QString timestamp_str = QString::fromStdString(item["timestamp"].get<std::string>());
-            QDateTime dt = QDateTime::fromString(timestamp_str, Qt::ISODate);
-            dt.setTimeSpec(Qt::UTC);
+            // Qt::ISODate parses ISO 8601 with timezone info (the Z suffix) correctly
+            QDateTime dt = QDateTime::fromString(timestamp_str, Qt::ISODate).toUTC();
+            if (!dt.isValid()) continue;
             
             // Only consider it the "current" stream if it's within the recent window
             if (dt <= now_plus_margin && dt >= now_minus_margin) {
                 last_valid_stream = item;
+                found_stream = true;
             }
         }
         
         is_evil_only_stream = false;
         
-        if (last_valid_stream != nullptr && last_valid_stream.contains("live") && last_valid_stream["live"].get<bool>()) {
+        if (found_stream && last_valid_stream.contains("live") && last_valid_stream["live"].is_boolean() && last_valid_stream["live"].get<bool>()) {
             if (last_valid_stream.contains("streamers") && last_valid_stream["streamers"].is_array()) {
                 bool has_evil = false;
                 bool has_neuro = false;
@@ -546,24 +562,65 @@ void NeuroLavaLampWidget::onScheduleReply(QNetworkReply* reply)
                     }
                 }
                 
+                std::string title = last_valid_stream.contains("title") ? last_valid_stream["title"].get<std::string>() : "Unknown";
+                
                 if (has_evil && !has_neuro) {
                     is_evil_only_stream = true;
+                    schedule_status_label->setText(QString("Schedule: Evil-only stream detected (\"%1\")").arg(QString::fromStdString(title)));
+                } else {
+                    schedule_status_label->setText(QString("Schedule: Neuro stream (\"%1\")").arg(QString::fromStdString(title)));
                 }
+            } else {
+                schedule_status_label->setText("Schedule: Live stream with no streamer data");
             }
+        } else if (found_stream) {
+            schedule_status_label->setText("Schedule: No live stream scheduled");
+        } else {
+            schedule_status_label->setText("Schedule: No recent stream found in schedule");
         }
     } catch (...) {
-        // Parse error, just ignore
+        schedule_status_label->setText("Schedule: Parse error");
     }
 }
 
 void NeuroLavaLampWidget::processEventData(const QByteArray& data)
 {
+    last_raw_event_data = data;
+    
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (!doc.isObject()) {
+        return;
+    }
+
+    QJsonObject obj = doc.object();
+    bool new_live = obj["live"].toBool();
+    
+    int r = 0, g = 0, b = 0;
+    bool has_color = false;
+    
+    if (new_live) {
+        QJsonArray rgb_arr = obj["rgb"].toArray();
+        if (rgb_arr.size() == 3) {
+            r = rgb_arr[0].toInt();
+            g = rgb_arr[1].toInt();
+            b = rgb_arr[2].toInt();
+            has_color = true;
+        }
+    }
+
     if (disable_evil_input->isChecked() && is_evil_only_stream) {
-        status_label->setText("Neuro Lava Lamp: Disabled (Plasma Globe rule active)");
+        if (has_color) {
+            status_label->setText(QString("Neuro Lava Lamp: Disabled (Plasma Globe rule active) (RGB: %1, %2, %3)").arg(r).arg(g).arg(b));
+            current_live_color = ToRGBColor(r, g, b);
+        } else {
+            status_label->setText("Neuro Lava Lamp: Disabled (Plasma Globe rule active)");
+        }
         
         if (is_live) {
             is_live = false;
+            animation_timer->stop();
             poll_timer->setInterval(offline_interval_input->value());
+            schedule_timer->setInterval(3600000);
             for (const auto& item : device_items) {
                 bool has_selected = false;
                 for (const auto& zone : item.zones) {
@@ -581,20 +638,8 @@ void NeuroLavaLampWidget::processEventData(const QByteArray& data)
         return;
     }
     
-    QJsonDocument doc = QJsonDocument::fromJson(data);
-    if (!doc.isObject()) {
-        return;
-    }
-
-    QJsonObject obj = doc.object();
-    bool new_live = obj["live"].toBool();
-    
     if (new_live) {
-        QJsonArray rgb_arr = obj["rgb"].toArray();
-        if (rgb_arr.size() == 3) {
-            int r = rgb_arr[0].toInt();
-            int g = rgb_arr[1].toInt();
-            int b = rgb_arr[2].toInt();
+        if (has_color) {
             RGBColor color = ToRGBColor(r, g, b);
             
             // Check for zero-color behavior
@@ -650,9 +695,11 @@ void NeuroLavaLampWidget::processEventData(const QByteArray& data)
             QString modeStr = current_connection_mode.isEmpty() ? "Unknown" : current_connection_mode;
             status_label->setText(QString("Neuro Lava Lamp: Live [%1] (RGB: %2, %3, %4)").arg(modeStr).arg(r).arg(g).arg(b));
             
+            bool transitioned_to_live = false;
             if (!is_live) {
                 // Transition to live: backup state
                 is_live = true;
+                transitioned_to_live = true;
                 poll_timer->setInterval(live_interval_input->value());
                 schedule_timer->setInterval(1800000); // Poll schedule every 30 mins while live
                 for (const auto& item : device_items) {
@@ -671,7 +718,7 @@ void NeuroLavaLampWidget::processEventData(const QByteArray& data)
             }
             
             // Trigger animation or apply instantly
-            if (color_changed || (!is_live && new_live)) {
+            if (color_changed || transitioned_to_live) {
                 animation_target_color = color;
                 animation_progress = 0;
                 animation_duration = 1000; // 1 second duration
