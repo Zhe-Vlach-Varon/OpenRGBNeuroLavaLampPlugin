@@ -17,9 +17,9 @@
 
 using json = nlohmann::json;
 
-NeuroLavaLampWidget::NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *parent)
+NeuroLavaLampWidget::NeuroLavaLampWidget(OpenRGBPluginAPIInterface* api, QWidget *parent)
     : QWidget(parent)
-    , resource_manager(rm)
+    , plugin_api(api)
     , sse_reply(nullptr)
     , is_live(false)
 {
@@ -186,7 +186,7 @@ NeuroLavaLampWidget::~NeuroLavaLampWidget()
 
 void NeuroLavaLampWidget::loadSettings()
 {
-    json settings = resource_manager->GetSettingsManager()->GetSettings("NeuroLavaLamp");
+    json settings = plugin_api->GetSettings("NeuroLavaLamp");
     
     url_input->blockSignals(true);
     sse_url_input->blockSignals(true);
@@ -259,15 +259,15 @@ void NeuroLavaLampWidget::saveSettings()
     for (const auto& item : device_items) {
         for (const auto& zone : item.zones) {
             if (zone.checkbox->isChecked()) {
-                std::string unique_id = item.controller->name + ":" + item.controller->serial + ":" + std::to_string(zone.zone_idx);
+                std::string unique_id = item.controller->GetName() + ":" + item.controller->GetSerial() + ":" + std::to_string(zone.zone_idx);
                 selected_zones.push_back(unique_id);
             }
         }
     }
     settings["selected_zones"] = selected_zones;
     
-    resource_manager->GetSettingsManager()->SetSettings("NeuroLavaLamp", settings);
-    resource_manager->GetSettingsManager()->SaveSettings();
+    plugin_api->SetSettings("NeuroLavaLamp", settings);
+    plugin_api->SaveSettings();
 }
 
 void NeuroLavaLampWidget::onSettingsChanged()
@@ -306,9 +306,9 @@ void NeuroLavaLampWidget::onSettingsChanged()
 
 void NeuroLavaLampWidget::updateDeviceList()
 {
-    std::vector<RGBController*>& controllers = resource_manager->GetRGBControllers();
+    std::vector<RGBControllerInterface*> controllers = plugin_api->GetRGBControllers();
     
-    json settings = resource_manager->GetSettingsManager()->GetSettings("NeuroLavaLamp");
+    json settings = plugin_api->GetSettings("NeuroLavaLamp");
     std::vector<std::string> saved_zones;
     if (settings.contains("selected_zones") && settings["selected_zones"].is_array()) {
         for (auto& z : settings["selected_zones"]) {
@@ -316,11 +316,11 @@ void NeuroLavaLampWidget::updateDeviceList()
         }
     }
     
-    for (RGBController* dev : controllers) {
+    for (RGBControllerInterface* dev : controllers) {
         QGroupBox* dev_box = new QGroupBox();
         QVBoxLayout* dev_layout = new QVBoxLayout(dev_box);
         
-        QCheckBox* dev_cb = new QCheckBox(QString::fromStdString(dev->name));
+        QCheckBox* dev_cb = new QCheckBox(QString::fromStdString(dev->GetName()));
         dev_layout->addWidget(dev_cb);
         
         // Add left margin for zones
@@ -333,15 +333,15 @@ void NeuroLavaLampWidget::updateDeviceList()
         
         bool any_zone_checked = false;
         
-        for (size_t z = 0; z < dev->zones.size(); z++) {
-            QCheckBox* zone_cb = new QCheckBox(QString::fromStdString(dev->zones[z].name));
+        for (size_t z = 0; z < dev->GetZoneCount(); z++) {
+            QCheckBox* zone_cb = new QCheckBox(QString::fromStdString(dev->GetZoneName(z)));
             zones_layout->addWidget(zone_cb);
             
             ZoneItem z_item;
             z_item.zone_idx = z;
             z_item.checkbox = zone_cb;
             
-            std::string unique_id = dev->name + ":" + dev->serial + ":" + std::to_string(z);
+            std::string unique_id = dev->GetName() + ":" + dev->GetSerial() + ":" + std::to_string(z);
             if (std::find(saved_zones.begin(), saved_zones.end(), unique_id) != saved_zones.end()) {
                 zone_cb->setChecked(true);
                 any_zone_checked = true;
@@ -371,7 +371,7 @@ void NeuroLavaLampWidget::updateDeviceList()
     device_list_layout->addStretch();
 }
 
-void NeuroLavaLampWidget::onDeviceCheckboxToggled(bool checked, RGBController* dev)
+void NeuroLavaLampWidget::onDeviceCheckboxToggled(bool checked, RGBControllerInterface* dev)
 {
     for (auto& item : device_items) {
         if (item.controller == dev) {
@@ -389,7 +389,7 @@ void NeuroLavaLampWidget::onDeviceCheckboxToggled(bool checked, RGBController* d
     }
 }
 
-void NeuroLavaLampWidget::onZoneCheckboxToggled(RGBController* dev)
+void NeuroLavaLampWidget::onZoneCheckboxToggled(RGBControllerInterface* dev)
 {
     saveSettings();
     if (is_live) {
@@ -404,7 +404,7 @@ void NeuroLavaLampWidget::onSelectAllClicked()
     }
 }
 
-void NeuroLavaLampWidget::refreshDeviceLiveState(RGBController* dev)
+void NeuroLavaLampWidget::refreshDeviceLiveState(RGBControllerInterface* dev)
 {
     // Find the device item
     DeviceItem* target_item = nullptr;
@@ -441,7 +441,7 @@ void NeuroLavaLampWidget::refreshDeviceLiveState(RGBController* dev)
         dev->SetCustomMode();
         for (const auto& zone : target_item->zones) {
             if (zone.checkbox->isChecked()) {
-                dev->SetAllZoneLEDs(zone.zone_idx, current_live_color);
+                dev->SetAllZoneColors(zone.zone_idx, current_live_color);
             }
         }
         dev->UpdateLEDs();
@@ -812,7 +812,7 @@ void NeuroLavaLampWidget::onSseFinished()
 
 void NeuroLavaLampWidget::setEffectsPluginDeviceState(const DeviceItem& item, bool restoring)
 {
-    QString deviceName = QString::fromStdString(item.controller->name);
+    QString deviceName = QString::fromStdString(item.controller->GetName());
     QTabWidget* effectTabs = nullptr;
     QWidgetList allWidgets = QApplication::allWidgets();
     for (QWidget* widget : allWidgets) {
@@ -880,7 +880,7 @@ void NeuroLavaLampWidget::setEffectsPluginDeviceState(const DeviceItem& item, bo
                                 for (const ZoneItem& zItem : item.zones) {
                                     if (!restoring && !zItem.checkbox->isChecked()) continue;
                                     int zIdx = zItem.zone_idx;
-                                    QString expectedPrefix = QString::fromStdString("• " + item.controller->name + ": " + item.controller->zones[zIdx].name);
+                                    QString expectedPrefix = QString::fromStdString("• " + item.controller->GetName() + ": " + item.controller->GetZoneName(zIdx));
                                     if (zName.startsWith(expectedPrefix)) {
                                         matches = true;
                                         break;
@@ -923,23 +923,23 @@ void NeuroLavaLampWidget::setEffectsPluginDeviceState(const DeviceItem& item, bo
     effectTabs->setCurrentIndex(userIndex);
 }
 
-void NeuroLavaLampWidget::backupDevice(RGBController* dev)
+void NeuroLavaLampWidget::backupDevice(RGBControllerInterface* dev)
 {
     DeviceStateBackup backup;
-    backup.active_mode = dev->active_mode;
-    backup.colors = dev->colors;
+    backup.active_mode = dev->GetActiveMode();
+    backup.colors.assign(dev->GetColorsPointer(), dev->GetColorsPointer() + dev->GetLEDCount());
     device_backups.insert(dev, backup);
 }
 
-void NeuroLavaLampWidget::restoreDevice(RGBController* dev)
+void NeuroLavaLampWidget::restoreDevice(RGBControllerInterface* dev)
 {
     DeviceStateBackup backup = device_backups[dev];
     
-    dev->SetMode(backup.active_mode);
+    dev->SetActiveMode(backup.active_mode);
     dev->UpdateMode();
     
-    for (size_t i = 0; i < backup.colors.size() && i < dev->colors.size(); i++) {
-        dev->colors[i] = backup.colors[i];
+    for (size_t i = 0; i < backup.colors.size() && i < dev->GetLEDCount(); i++) {
+        dev->SetColor(i, backup.colors[i]);
     }
     
     dev->UpdateLEDs();
@@ -958,7 +958,7 @@ void NeuroLavaLampWidget::applyColor(RGBColor color, bool instant)
                     item.controller->SetCustomMode();
                     has_selected = true;
                 }
-                item.controller->SetAllZoneLEDs(zone.zone_idx, color);
+                item.controller->SetAllZoneColors(zone.zone_idx, color);
             }
         }
         
@@ -1027,11 +1027,11 @@ void NeuroLavaLampWidget::animationLoop()
                 unsigned char tb = RGBGetBValue(base_target);
                 
                 if (effect == 2) { // Wave (per-LED)
-                    const ::zone* dev_zone = &item.controller->zones[zone.zone_idx];
-                    for (unsigned int led_idx = 0; led_idx < dev_zone->leds_count; led_idx++) {
+                    unsigned int leds_count = item.controller->GetZoneLEDsCount(zone.zone_idx);
+                    for (unsigned int led_idx = 0; led_idx < leds_count; led_idx++) {
                         float led_pos = 0.0f;
-                        if (dev_zone->leds_count > 1) {
-                            led_pos = (float)led_idx / (float)(dev_zone->leds_count - 1);
+                        if (leds_count > 1) {
+                            led_pos = (float)led_idx / (float)(leds_count - 1);
                         }
                         
                         // Sharp wave front moving across the zone
@@ -1046,7 +1046,7 @@ void NeuroLavaLampWidget::animationLoop()
                         unsigned char g = sg + (tg - sg) * led_t;
                         unsigned char b = sb + (tb - sb) * led_t;
                         
-                        dev_zone->colors[led_idx] = ToRGBColor(r,g,b);
+                        item.controller->SetZoneColor(zone.zone_idx, led_idx, ToRGBColor(r,g,b));
                     }
                 } else {
                     float zone_t = t;
@@ -1054,7 +1054,7 @@ void NeuroLavaLampWidget::animationLoop()
                     unsigned char g = sg + (tg - sg) * zone_t;
                     unsigned char b = sb + (tb - sb) * zone_t;
                     
-                    item.controller->SetAllZoneLEDs(zone.zone_idx, ToRGBColor(r,g,b));
+                    item.controller->SetAllZoneColors(zone.zone_idx, ToRGBColor(r,g,b));
                 }
             }
         }

@@ -2,7 +2,7 @@
 #include "NeuroLavaLampWidget.h"
 #include <QHBoxLayout>
 
-ResourceManagerInterface* OpenRGBNeuroLavaLampPlugin::RMPointer = nullptr;
+OpenRGBPluginAPIInterface* OpenRGBNeuroLavaLampPlugin::RMPointer = nullptr;
 
 OpenRGBPluginInfo OpenRGBNeuroLavaLampPlugin::GetPluginInfo()
 {
@@ -21,6 +21,8 @@ OpenRGBPluginInfo OpenRGBNeuroLavaLampPlugin::GetPluginInfo()
     info.TabIconString=  "NeuroLavaLamp";
     info.TabIcon.load(":/OpenRGBNeuroLavaLampPlugin.png");
 
+    info.ProtocolVersion = 2;
+
     return info;
 }
 
@@ -30,10 +32,10 @@ unsigned int OpenRGBNeuroLavaLampPlugin::GetPluginAPIVersion()
     return OPENRGB_PLUGIN_API_VERSION;
 }
 
-void OpenRGBNeuroLavaLampPlugin::Load(ResourceManagerInterface* resource_manager_ptr)
+void OpenRGBNeuroLavaLampPlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
 {
     printf("[OpenRGBNeuroLavaLampPlugin] Loading plugin.\n");
-    RMPointer = resource_manager_ptr;
+    RMPointer = plugin_api_ptr;
 }
 
 QWidget* OpenRGBNeuroLavaLampPlugin::GetWidget()
@@ -60,4 +62,34 @@ OpenRGBNeuroLavaLampPlugin::OpenRGBNeuroLavaLampPlugin()
 OpenRGBNeuroLavaLampPlugin::~OpenRGBNeuroLavaLampPlugin()
 {
     printf("[OpenRGBNeuroLavaLampPlugin] Destructor.\n");
+}
+
+void OpenRGBNeuroLavaLampPlugin::OnProfileAboutToLoad()
+{
+}
+
+void OpenRGBNeuroLavaLampPlugin::OnProfileLoad(nlohmann::json profile_data)
+{
+}
+
+nlohmann::json OpenRGBNeuroLavaLampPlugin::OnProfileSave()
+{
+    return nlohmann::json();
+}
+
+unsigned char* OpenRGBNeuroLavaLampPlugin::OnSDKCommand(unsigned int pkt_id, unsigned char* pkt_data, unsigned int* pkt_size)
+{
+    return nullptr;
+}
+
+void OpenRGBNeuroLavaLampPlugin::ProfileManagerUpdated(unsigned int update_reason)
+{
+}
+
+void OpenRGBNeuroLavaLampPlugin::ResourceManagerUpdated(unsigned int update_reason)
+{
+}
+
+void OpenRGBNeuroLavaLampPlugin::SettingsManagerUpdated(unsigned int update_reason)
+{
 }

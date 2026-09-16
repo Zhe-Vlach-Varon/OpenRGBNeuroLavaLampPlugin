@@ -16,10 +16,8 @@
 #include <QPushButton>
 #include <vector>
 
-#include "ResourceManagerInterface.h"
-#include "RGBController.h"
-#include "SettingsManager.h"
-#include "json.hpp"
+#include "OpenRGBPluginInterface.h"
+#include <nlohmann/json.hpp>
 
 struct DeviceStateBackup {
     int active_mode;
@@ -32,7 +30,7 @@ struct ZoneItem {
 };
 
 struct DeviceItem {
-    RGBController* controller;
+    RGBControllerInterface* controller;
     QCheckBox* device_checkbox;
     std::vector<ZoneItem> zones;
 };
@@ -41,7 +39,7 @@ class NeuroLavaLampWidget : public QWidget
 {
     Q_OBJECT
 public:
-    NeuroLavaLampWidget(ResourceManagerInterface* rm, QWidget *parent = nullptr);
+    NeuroLavaLampWidget(OpenRGBPluginAPIInterface* api, QWidget *parent = nullptr);
     ~NeuroLavaLampWidget();
 
 private slots:
@@ -62,18 +60,18 @@ private slots:
     void onScheduleReply(QNetworkReply* reply);
     
     void animationLoop();
-    void onDeviceCheckboxToggled(bool checked, RGBController* dev);
-    void onZoneCheckboxToggled(RGBController* dev);
-    void refreshDeviceLiveState(RGBController* dev);
+    void onDeviceCheckboxToggled(bool checked, RGBControllerInterface* dev);
+    void onZoneCheckboxToggled(RGBControllerInterface* dev);
+    void refreshDeviceLiveState(RGBControllerInterface* dev);
 
 private:
-    void backupDevice(RGBController* dev);
-    void restoreDevice(RGBController* dev);
+    void backupDevice(RGBControllerInterface* dev);
+    void restoreDevice(RGBControllerInterface* dev);
     void processEventData(const QByteArray& data);
     
     void setEffectsPluginDeviceState(const DeviceItem& item, bool restoring);
 
-    ResourceManagerInterface* resource_manager;
+    OpenRGBPluginAPIInterface* plugin_api;
     QNetworkAccessManager* network_manager;
     QNetworkAccessManager* schedule_network_manager;
     QTimer* poll_timer;
@@ -113,7 +111,7 @@ private:
     int animation_duration;
     
     bool is_live;
-    QMap<RGBController*, DeviceStateBackup> device_backups;
+    QMap<RGBControllerInterface*, DeviceStateBackup> device_backups;
     QMap<QString, QMap<int, QMap<QString, bool>>> original_effects_state;
     
     std::vector<DeviceItem> device_items;
