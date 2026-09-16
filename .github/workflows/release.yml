@@ -23,7 +23,7 @@ jobs:
         run: git config --global --add safe.directory '*'
       - name: Build
         run: |
-          qmake OpenRGBNeuroLavaLampPlugin.pro
+          qmake6 OpenRGBNeuroLavaLampPlugin.pro
           make -j$(nproc)
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -45,11 +45,11 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: '5.15.2'
+          version: '6.6.2'
           arch: 'win64_msvc2019_64'
       - name: Build
         run: |
-          qmake OpenRGBNeuroLavaLampPlugin.pro
+          qmake6 OpenRGBNeuroLavaLampPlugin.pro
           nmake
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -57,31 +57,6 @@ jobs:
           name: OpenRGBNeuroLavaLampPlugin_Windows_64.dll
           path: release/OpenRGBNeuroLavaLampPlugin.dll
 
-  build-windows-32:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-      - name: Setup MSVC environment (x86)
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x86
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '5.15.2'
-          arch: 'win32_msvc2019'
-      - name: Build
-        run: |
-          qmake OpenRGBNeuroLavaLampPlugin.pro
-          nmake
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: OpenRGBNeuroLavaLampPlugin_Windows_32.dll
-          path: release/OpenRGBNeuroLavaLampPlugin.dll
 
   build-macos-arm64:
     runs-on: macos-14
@@ -92,16 +67,16 @@ jobs:
           fetch-depth: 0
       - name: Install Qt via Brew
         run: |
-          brew install qt@5
+          brew install qt@6
       - name: Build
         run: |
           eval $(/opt/homebrew/bin/brew shellenv)
-          export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
-          qmake OpenRGBNeuroLavaLampPlugin.pro
+          export PATH="/opt/homebrew/opt/qt@6/bin:$PATH"
+          qmake6 OpenRGBNeuroLavaLampPlugin.pro
           make -j$(sysctl -n hw.ncpu)
-          install_name_tool libOpenRGBNeuroLavaLampPlugin.dylib -change /opt/homebrew/opt/qt@5/lib/QtWidgets.framework/Versions/5/QtWidgets @executable_path/../Frameworks/QtWidgets.framework/Versions/5/QtWidgets
-          install_name_tool libOpenRGBNeuroLavaLampPlugin.dylib -change /opt/homebrew/opt/qt@5/lib/QtGui.framework/Versions/5/QtGui @executable_path/../Frameworks/QtGui.framework/Versions/5/QtGui
-          install_name_tool libOpenRGBNeuroLavaLampPlugin.dylib -change /opt/homebrew/opt/qt@5/lib/QtCore.framework/Versions/5/QtCore @executable_path/../Frameworks/QtCore.framework/Versions/5/QtCore
+          install_name_tool libOpenRGBNeuroLavaLampPlugin.dylib -change /opt/homebrew/opt/qt@6/lib/QtWidgets.framework/Versions/A/QtWidgets @executable_path/../Frameworks/QtWidgets.framework/Versions/A/QtWidgets
+          install_name_tool libOpenRGBNeuroLavaLampPlugin.dylib -change /opt/homebrew/opt/qt@6/lib/QtGui.framework/Versions/A/QtGui @executable_path/../Frameworks/QtGui.framework/Versions/A/QtGui
+          install_name_tool libOpenRGBNeuroLavaLampPlugin.dylib -change /opt/homebrew/opt/qt@6/lib/QtCore.framework/Versions/A/QtCore @executable_path/../Frameworks/QtCore.framework/Versions/A/QtCore
           codesign --force --verify -s - libOpenRGBNeuroLavaLampPlugin.dylib
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -110,7 +85,7 @@ jobs:
           path: libOpenRGBNeuroLavaLampPlugin.dylib
 
   release:
-    needs: [build-linux-amd64, build-windows-64, build-windows-32, build-macos-arm64]
+    needs: [build-linux-amd64, build-windows-64, build-macos-arm64]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     steps:
@@ -124,7 +99,6 @@ jobs:
           mkdir release-files
           cp artifacts/libOpenRGBNeuroLavaLampPlugin_Linux_amd64.so/libOpenRGBNeuroLavaLampPlugin.so release-files/libOpenRGBNeuroLavaLampPlugin_Linux_amd64.so || true
           cp artifacts/OpenRGBNeuroLavaLampPlugin_Windows_64.dll/OpenRGBNeuroLavaLampPlugin.dll release-files/OpenRGBNeuroLavaLampPlugin_Windows_64.dll || true
-          cp artifacts/OpenRGBNeuroLavaLampPlugin_Windows_32.dll/OpenRGBNeuroLavaLampPlugin.dll release-files/OpenRGBNeuroLavaLampPlugin_Windows_32.dll || true
           cp artifacts/libOpenRGBNeuroLavaLampPlugin_MacOS_ARM64.dylib/libOpenRGBNeuroLavaLampPlugin.dylib release-files/libOpenRGBNeuroLavaLampPlugin_MacOS_ARM64.dylib || true
 
       - name: Create GitHub Release
