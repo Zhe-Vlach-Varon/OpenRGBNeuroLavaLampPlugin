@@ -2,3 +2,6 @@
 	path = OpenRGB
 	url = https://gitlab.com/CalcProgrammer1/OpenRGB.git
 	branch = master
+[submodule "OpenRGBVisualMapPlugin"]
+	path = OpenRGBVisualMapPlugin
+	url = https://gitlab.com/OpenRGBDevelopers/OpenRGBVisualMapPlugin.git
