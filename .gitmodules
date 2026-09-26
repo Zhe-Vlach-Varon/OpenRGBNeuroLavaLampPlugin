@@ -5,3 +5,6 @@
 [submodule "OpenRGBVisualMapPlugin"]
 	path = OpenRGBVisualMapPlugin
 	url = https://gitlab.com/OpenRGBDevelopers/OpenRGBVisualMapPlugin.git
+[submodule "OpenRGBEffectsPlugin"]
+	path = OpenRGBEffectsPlugin
+	url = https://gitlab.com/OpenRGBDevelopers/OpenRGBEffectsPlugin.git
