@@ -34,6 +34,9 @@ public:
     void                SettingsManagerUpdated(unsigned int update_reason) override;
 
     static OpenRGBPluginAPIInterface* RMPointer;
+
+private:
+    QWidget*            widget = nullptr;
 };
 
 #endif // OPENRGBNEUROLAVALAMPPLUGIN_H

@@ -307,8 +307,6 @@ void NeuroLavaLampWidget::onSettingsChanged()
 
 void NeuroLavaLampWidget::updateDeviceList()
 {
-    std::vector<RGBControllerInterface*> controllers = plugin_api->GetRGBControllers();
-    
     json settings = plugin_api->GetSettings("NeuroLavaLamp");
     std::vector<std::string> saved_zones;
     if (settings.contains("selected_zones") && settings["selected_zones"].is_array()) {
@@ -316,8 +314,41 @@ void NeuroLavaLampWidget::updateDeviceList()
             if (z.is_string()) saved_zones.push_back(z.get<std::string>());
         }
     }
-    
+
+    rebuildDeviceList(saved_zones);
+}
+
+void NeuroLavaLampWidget::rebuildDeviceList(const std::vector<std::string>& initially_checked_zones)
+{
+    /*-----------------------------------------------------*\
+    | Clear the current list (widgets and bookkeeping)      |
+    \*-----------------------------------------------------*/
+    while (device_list_layout->count() > 0) {
+        QLayoutItem* layout_item = device_list_layout->takeAt(0);
+
+        if (layout_item->widget()) {
+            layout_item->widget()->deleteLater();
+        }
+
+        delete layout_item;
+    }
+
+    device_items.clear();
+
+    std::vector<RGBControllerInterface*> controllers = plugin_api->GetRGBControllers();
+
     for (RGBControllerInterface* dev : controllers) {
+        /*-------------------------------------------------*\
+        | Skip hidden devices. The VisualMap plugin hides   |
+        | its member devices while it aggregates them into  |
+        | a virtual controller; those members are owned by  |
+        | the map and must not be selectable here (Select   |
+        | All included).                                    |
+        \*-------------------------------------------------*/
+        if (dev->GetHidden()) {
+            continue;
+        }
+
         QGroupBox* dev_box = new QGroupBox();
         QVBoxLayout* dev_layout = new QVBoxLayout(dev_box);
         
@@ -343,7 +374,7 @@ void NeuroLavaLampWidget::updateDeviceList()
             z_item.checkbox = zone_cb;
             
             std::string unique_id = dev->GetName() + ":" + dev->GetSerial() + ":" + std::to_string(z);
-            if (std::find(saved_zones.begin(), saved_zones.end(), unique_id) != saved_zones.end()) {
+            if (std::find(initially_checked_zones.begin(), initially_checked_zones.end(), unique_id) != initially_checked_zones.end()) {
                 zone_cb->setChecked(true);
                 any_zone_checked = true;
             }
@@ -400,9 +431,100 @@ void NeuroLavaLampWidget::onZoneCheckboxToggled(RGBControllerInterface* dev)
 
 void NeuroLavaLampWidget::onSelectAllClicked()
 {
+    /*-----------------------------------------------------*\
+    | Only devices currently in the list are selectable,   |
+    | and hidden devices (e.g. VisualMap members) never    |
+    | make it into the list, so they can't be selected     |
+    | here.                                                |
+    \*-----------------------------------------------------*/
     for (auto& item : device_items) {
         item.device_checkbox->setChecked(true);
     }
+}
+
+void NeuroLavaLampWidget::refreshDeviceList()
+{
+    std::vector<RGBControllerInterface*> controllers = plugin_api->GetRGBControllers();
+
+    /*-----------------------------------------------------*\
+    | Nothing to do if the set of visible devices matches  |
+    | what we already show.                                 |
+    \*-----------------------------------------------------*/
+    bool changed = false;
+
+    for (const auto& item : device_items) {
+        if (item.controller->GetHidden()) {
+            // A listed device got hidden (e.g. by VisualMap taking it over)
+            changed = true;
+            break;
+        }
+    }
+
+    if (!changed) {
+        std::set<RGBControllerInterface*> listed;
+        for (const auto& item : device_items) {
+            listed.insert(item.controller);
+        }
+
+        for (RGBControllerInterface* dev : controllers) {
+            if (!dev->GetHidden() && !listed.count(dev)) {
+                // A new visible device appeared, or one of ours got unhidden
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    if (!changed) {
+        return;
+    }
+
+    /*-----------------------------------------------------*\
+    | Release control of any selected devices that are     |
+    | about to disappear (they became hidden), so the      |
+    | plugin that hid them can own their LEDs cleanly.     |
+    \*-----------------------------------------------------*/
+    for (auto& item : device_items) {
+        if (!item.controller->GetHidden()) {
+            continue;
+        }
+
+        bool has_selected = false;
+        for (const auto& zone : item.zones) {
+            if (zone.checkbox->isChecked()) {
+                has_selected = true;
+                break;
+            }
+        }
+
+        if (has_selected && device_backups.contains(item.controller)) {
+            setEffectsPluginDeviceState(item, true); // Re-enable the effects plugin state
+            restoreDevice(item.controller);
+        }
+    }
+
+    /*-----------------------------------------------------*\
+    | Preserve the current selection of devices that stay  |
+    | visible; hidden ones drop out (and with them their   |
+    | saved selection).                                    |
+    \*-----------------------------------------------------*/
+    std::vector<std::string> preserved_zones;
+    for (const auto& item : device_items) {
+        if (item.controller->GetHidden()) {
+            continue;
+        }
+
+        for (const auto& zone : item.zones) {
+            if (zone.checkbox->isChecked()) {
+                preserved_zones.push_back(item.controller->GetName() + ":" + item.controller->GetSerial() + ":" + std::to_string(zone.zone_idx));
+            }
+        }
+    }
+
+    rebuildDeviceList(preserved_zones);
+
+    // Persist the pruned selection so hidden devices don't come back selected on restart
+    saveSettings();
 }
 
 void NeuroLavaLampWidget::refreshDeviceLiveState(RGBControllerInterface* dev)
@@ -451,6 +573,13 @@ void NeuroLavaLampWidget::refreshDeviceLiveState(RGBControllerInterface* dev)
 
 void NeuroLavaLampWidget::pollApi()
 {
+    /*-----------------------------------------------------*\
+    | Keep the device list in sync with visibility changes  |
+    | (e.g. VisualMap hiding/unhiding member devices).      |
+    | Cheap no-op unless something actually changed.        |
+    \*-----------------------------------------------------*/
+    refreshDeviceList();
+
     // Check if SSE is alive. If not, try to restart it.
     if (!sse_reply || sse_reply->error() != QNetworkReply::NoError || !sse_reply->isOpen()) {
         startSseConnection();

@@ -64,9 +64,20 @@ private slots:
     void onZoneCheckboxToggled(RGBControllerInterface* dev);
     void refreshDeviceLiveState(RGBControllerInterface* dev);
 
+    /*-----------------------------------------------------*\
+    | Resync the device list with currently visible         |
+    | controllers (hides shown by e.g. VisualMap drop out,  |
+    | unhidden/new devices reappear). No-op when nothing    |
+    | changed. Invoked cross-thread via                     |
+    | QMetaObject::invokeMethod from the plugin entrypoint, |
+    | so it must stay a slot and run on the GUI thread.     |
+    \*-----------------------------------------------------*/
+    void refreshDeviceList();
+
 private:
     void backupDevice(RGBControllerInterface* dev);
     void restoreDevice(RGBControllerInterface* dev);
+    void rebuildDeviceList(const std::vector<std::string>& initially_checked_zones);
     void processEventData(const QByteArray& data);
 
     void setEffectsPluginDeviceState(const DeviceItem& item, bool restoring);
