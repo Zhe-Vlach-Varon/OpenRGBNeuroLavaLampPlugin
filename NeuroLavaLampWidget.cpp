@@ -1,4 +1,5 @@
 #include "NeuroLavaLampWidget.h"
+#include <set>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -812,7 +813,47 @@ void NeuroLavaLampWidget::onSseFinished()
 
 void NeuroLavaLampWidget::setEffectsPluginDeviceState(const DeviceItem& item, bool restoring)
 {
-    QString deviceName = QString::fromStdString(item.controller->GetName());
+    /*-----------------------------------------------------*\
+    | Zones of this device that we are taking control over  |
+    | (all zones when restoring so every previously         |
+    | disabled effect can be re-enabled)                    |
+    \*-----------------------------------------------------*/
+    std::vector<int> selected_zones;
+
+    for (const auto& zone : item.zones) {
+        if (restoring || zone.checkbox->isChecked()) {
+            selected_zones.push_back(zone.zone_idx);
+        }
+    }
+
+    applyEffectsPluginState(item.controller, selected_zones, restoring);
+
+    /*-----------------------------------------------------*\
+    | Also handle controllers that share physical LEDs with |
+    | this one. A VisualMap virtual controller aggregates   |
+    | its member devices: an effect running on it keeps     |
+    | writing to every member (and vice versa when we       |
+    | control the virtual controller itself), which fights  |
+    | our color updates and causes flickering.              |
+    \*-----------------------------------------------------*/
+    for (RGBControllerInterface* other : findConflictingControllers(item.controller)) {
+        std::vector<int> all_zones;
+
+        for (unsigned int z = 0; z < other->GetZoneCount(); ++z) {
+            all_zones.push_back(z);
+        }
+
+        applyEffectsPluginState(other, all_zones, restoring);
+    }
+}
+
+void NeuroLavaLampWidget::applyEffectsPluginState(RGBControllerInterface* controller, const std::vector<int>& selected_zones, bool restoring)
+{
+    if (selected_zones.empty()) {
+        return;
+    }
+
+    QString deviceName = QString::fromStdString(controller->GetName());
     QTabWidget* effectTabs = nullptr;
     QWidgetList allWidgets = QApplication::allWidgets();
     for (QWidget* widget : allWidgets) {
@@ -821,19 +862,19 @@ void NeuroLavaLampWidget::setEffectsPluginDeviceState(const DeviceItem& item, bo
             break;
         }
     }
-    
+
     if (!effectTabs) return;
 
     int userIndex = effectTabs->currentIndex();
 
     for (int i = 1; i < effectTabs->count(); ++i) {
         effectTabs->setCurrentIndex(i);
-        
+
         for (QWidget* widget : allWidgets) {
             if (QString(widget->metaObject()->className()) == "DeviceListItem") {
                 QLabel* nameLabel = widget->findChild<QLabel*>("device_name");
                 if (nameLabel && nameLabel->text() == deviceName) {
-                    
+
                     QList<QWidget*> zoneWidgets;
                     for (QWidget* child : widget->findChildren<QWidget*>()) {
                         if (QString(child->metaObject()->className()) == "ZoneListItem") {
@@ -842,32 +883,22 @@ void NeuroLavaLampWidget::setEffectsPluginDeviceState(const DeviceItem& item, bo
                     }
 
                     if (zoneWidgets.isEmpty()) {
-                        bool anySelected = false;
-                        for (const ZoneItem& zItem : item.zones) {
-                            if (restoring || zItem.checkbox->isChecked()) {
-                                anySelected = true;
-                                break;
-                            }
-                        }
-                        
-                        if (anySelected) {
-                            QToolButton* enableBtn = widget->findChild<QToolButton*>("enable");
-                            if (enableBtn) {
-                                QString zoneKey = "GLOBAL";
-                                if (!restoring) {
-                                    if (enableBtn->isChecked()) {
-                                        original_effects_state[deviceName][i][zoneKey] = true;
-                                        enableBtn->setChecked(false);
-                                    } else if (!original_effects_state[deviceName][i].contains(zoneKey)) {
-                                        original_effects_state[deviceName][i][zoneKey] = false;
-                                    }
-                                } else {
-                                    if (original_effects_state.contains(deviceName) && 
-                                        original_effects_state[deviceName].contains(i) && 
-                                        original_effects_state[deviceName][i].contains(zoneKey) && 
-                                        original_effects_state[deviceName][i][zoneKey]) {
-                                        enableBtn->setChecked(true);
-                                    }
+                        QToolButton* enableBtn = widget->findChild<QToolButton*>("enable");
+                        if (enableBtn) {
+                            QString zoneKey = "GLOBAL";
+                            if (!restoring) {
+                                if (enableBtn->isChecked()) {
+                                    original_effects_state[deviceName][i][zoneKey] = true;
+                                    enableBtn->setChecked(false);
+                                } else if (!original_effects_state[deviceName][i].contains(zoneKey)) {
+                                    original_effects_state[deviceName][i][zoneKey] = false;
+                                }
+                            } else {
+                                if (original_effects_state.contains(deviceName) &&
+                                    original_effects_state[deviceName].contains(i) &&
+                                    original_effects_state[deviceName][i].contains(zoneKey) &&
+                                    original_effects_state[deviceName][i][zoneKey]) {
+                                    enableBtn->setChecked(true);
                                 }
                             }
                         }
@@ -877,16 +908,14 @@ void NeuroLavaLampWidget::setEffectsPluginDeviceState(const DeviceItem& item, bo
                             if (zoneNameLabel) {
                                 QString zName = zoneNameLabel->text();
                                 bool matches = false;
-                                for (const ZoneItem& zItem : item.zones) {
-                                    if (!restoring && !zItem.checkbox->isChecked()) continue;
-                                    int zIdx = zItem.zone_idx;
-                                    QString expectedPrefix = QString::fromStdString("• " + item.controller->GetName() + ": " + item.controller->GetZoneName(zIdx));
+                                for (int zIdx : selected_zones) {
+                                    QString expectedPrefix = QString::fromStdString("• " + controller->GetName() + ": " + controller->GetZoneName(zIdx));
                                     if (zName.startsWith(expectedPrefix)) {
                                         matches = true;
                                         break;
                                     }
                                 }
-                                
+
                                 if (matches) {
                                     QToolButton* enableBtn = zoneWidget->findChild<QToolButton*>("enable");
                                     if (enableBtn) {
@@ -899,9 +928,9 @@ void NeuroLavaLampWidget::setEffectsPluginDeviceState(const DeviceItem& item, bo
                                                 original_effects_state[deviceName][i][zoneKey] = false;
                                             }
                                         } else {
-                                            if (original_effects_state.contains(deviceName) && 
-                                                original_effects_state[deviceName].contains(i) && 
-                                                original_effects_state[deviceName][i].contains(zoneKey) && 
+                                            if (original_effects_state.contains(deviceName) &&
+                                                original_effects_state[deviceName].contains(i) &&
+                                                original_effects_state[deviceName][i].contains(zoneKey) &&
                                                 original_effects_state[deviceName][i][zoneKey]) {
                                                 enableBtn->setChecked(true);
                                             }
@@ -921,6 +950,84 @@ void NeuroLavaLampWidget::setEffectsPluginDeviceState(const DeviceItem& item, bo
     }
 
     effectTabs->setCurrentIndex(userIndex);
+}
+
+bool NeuroLavaLampWidget::sharesPhysicalLEDs(RGBControllerInterface* a, RGBControllerInterface* b)
+{
+    if (!a || !b || a == b) {
+        return false;
+    }
+
+    /*-----------------------------------------------------*\
+    | Only virtual controllers aggregate other devices'     |
+    | LEDs (e.g. the VisualMap controller). Two non-virtual |
+    | controllers never drive the same physical LEDs, so    |
+    | they cannot conflict even if their LED names happen   |
+    | to be identical.                                      |
+    \*-----------------------------------------------------*/
+    bool a_virtual = (a->GetDeviceType() == DEVICE_TYPE_VIRTUAL);
+    bool b_virtual = (b->GetDeviceType() == DEVICE_TYPE_VIRTUAL);
+
+    if (!a_virtual && !b_virtual) {
+        return false;
+    }
+
+    /*-----------------------------------------------------*\
+    | A virtual controller's LED names are copies of the    |
+    | member devices' LED names, so a name overlap means    |
+    | both controllers drive some of the same LEDs.         |
+    \*-----------------------------------------------------*/
+    std::set<std::string> led_names;
+
+    for (unsigned int i = 0; i < a->GetLEDCount(); ++i) {
+        std::string name = a->GetLEDName(i);
+        if (!name.empty()) {
+            led_names.insert(name);
+        }
+    }
+
+    for (unsigned int i = 0; i < b->GetLEDCount(); ++i) {
+        std::string name = b->GetLEDName(i);
+        if (!name.empty() && led_names.count(name)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::vector<RGBControllerInterface*> NeuroLavaLampWidget::findConflictingControllers(RGBControllerInterface* dev)
+{
+    std::vector<RGBControllerInterface*> result;
+    std::set<RGBControllerInterface*> seen;
+
+    auto add = [&](RGBControllerInterface* controller) {
+        if (controller && controller != dev && seen.insert(controller).second) {
+            result.push_back(controller);
+        }
+    };
+
+    for (RGBControllerInterface* other : plugin_api->GetRGBControllers()) {
+        if (sharesPhysicalLEDs(dev, other)) {
+            add(other);
+        }
+    }
+
+    /*-----------------------------------------------------*\
+    | Fallback: a hidden device is a member of some virtual |
+    | controller. If LED-name matching could not identify   |
+    | it (e.g. overlapping map pixels rename the LEDs),     |
+    | pause every virtual controller to be safe.            |
+    \*-----------------------------------------------------*/
+    if (result.empty() && dev->GetHidden()) {
+        for (RGBControllerInterface* other : plugin_api->GetRGBControllers()) {
+            if (other->GetDeviceType() == DEVICE_TYPE_VIRTUAL) {
+                add(other);
+            }
+        }
+    }
+
+    return result;
 }
 
 void NeuroLavaLampWidget::backupDevice(RGBControllerInterface* dev)

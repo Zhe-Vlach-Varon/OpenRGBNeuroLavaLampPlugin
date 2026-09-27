@@ -68,8 +68,11 @@ private:
     void backupDevice(RGBControllerInterface* dev);
     void restoreDevice(RGBControllerInterface* dev);
     void processEventData(const QByteArray& data);
-    
+
     void setEffectsPluginDeviceState(const DeviceItem& item, bool restoring);
+    void applyEffectsPluginState(RGBControllerInterface* controller, const std::vector<int>& selected_zones, bool restoring);
+    std::vector<RGBControllerInterface*> findConflictingControllers(RGBControllerInterface* dev);
+    static bool sharesPhysicalLEDs(RGBControllerInterface* a, RGBControllerInterface* b);
 
     OpenRGBPluginAPIInterface* plugin_api;
     QNetworkAccessManager* network_manager;
